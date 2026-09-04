@@ -1,33 +1,38 @@
 import asyncio
-import random
+import time
 from models import ServiceTask, ServiceValidationError
+from db import save_check_result  # <-- Новый импорт
 
 
-async def check_service(task: ServiceTask) -> dict[str, str | float | bool]:
-    """Имитирует асинхронный сетевой запрос к сервису."""
-    print(f"[START] Проверка: {task.name} ({task.url})...")
+async def check_service(task: ServiceTask) -> dict:
+    start_time = time.perf_counter()
+    await asyncio.sleep(0.3)  # Имитация сетевого запроса
+    response_time_ms = (time.perf_counter() - start_time) * 1000
+    
+    is_active = True
+    report = task.get_report(is_active=is_active, response_time_ms=response_time_ms)
+    
+    # Сохраняем в PostgreSQL!
+    await save_check_result(
+        service_name=report["service_name"],
+        url=report["url"],
+        is_active=report["is_active"],
+        response_time_ms=report["response_time_ms"]
+    )
+    
+    return report
 
-    delay = random.uniform(0.2, 1.2)
-    await asyncio.sleep(delay)
 
-    is_active = random.choice([True, True, True, False])
-    response_time_ms = delay * 1000
-
-    print(f"[DONE] Сервис '{task.name}' ответил за {response_time_ms:.0f} ms")
-    return task.get_report(is_active=is_active, response_time_ms=response_time_ms)
-
-
-async def main() -> None:
+async def main():
     raw_services = [
         {"name": "Auth API", "url": "https://api.example.com/auth", "timeout": 1.5},
         {"name": "Billing Service", "url": "https://billing.example.com", "timeout": 2.0},
+        {"name": "Notifications", "url": "https://notify.example.com", "timeout": 1.0},
         {"name": "Broken Service", "url": "ftp://bad-url.com", "timeout": 1.0},
-        {"name": "Database Proxy", "url": "http://db.internal", "timeout": 0.5},
     ]
 
     valid_tasks: list[ServiceTask] = []
 
-    print("--- 1. ПРОВЕРКА И ВАЛИДАЦИЯ ДАННЫХ ---")
     for item in raw_services:
         try:
             task = ServiceTask(
@@ -36,16 +41,15 @@ async def main() -> None:
                 timeout=float(item["timeout"])
             )
             valid_tasks.append(task)
-            print(f"[OK] Валидация успешна: {task.name}")
         except ServiceValidationError as err:
             print(f"[ОШИБКА ВАЛИДАЦИИ] {err}")
 
-    print("\n--- 2. ПАРАЛЛЕЛЬНЫЙ АСИНХРОННЫЙ ЗАПУСК ---")
+    print("\n--- Запуск асинхронной проверки и сохранения в БД ---")
     results = await asyncio.gather(*[check_service(task) for task in valid_tasks])
 
-    print("\n--- 3. ИТОГОВЫЕ РЕЗУЛЬТАТЫ В UTC ---")
+    print("\n[УСПЕХ] Все результаты успешно сохранены в PostgreSQL:")
     for report in results:
-        print(report)
+        print(f" - {report['service_name']}: {report['response_time_ms']} мс")
 
 
 if __name__ == "__main__":
